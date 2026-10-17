@@ -73,7 +73,7 @@ class JobStore:
         """Задания, которые не успели завершиться (нужно после перезапуска)."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT job_id, path FROM jobs WHERE status IN ('queued', 'running') ORDER BY created_at"
+                "SELECT job_id, path, created_at FROM jobs WHERE status IN ('queued', 'running') ORDER BY created_at"
             ).fetchall()
         return [dict(r) for r in rows]
 
