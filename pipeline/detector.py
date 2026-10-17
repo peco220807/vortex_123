@@ -150,12 +150,51 @@ def events_from_timeline(timeline: list[dict], sig: dict) -> list[dict]:
             hi = min(e["hi"], e["lo"] + WINDOW_SEC)
         t = signals.peak_motion_time(sig, lo, hi)
         t = (e["lo"] + e["hi"]) / 2 if t is None else t
+        # детектор людей знает точный момент (подошёл / кассира в последний раз видели на месте)
+        tp = None
+        for j in range(e.get("first_i", 0), e.get("last_i", e.get("first_i", 0)) + 1):
+            if j < len(timeline):
+                tp = (timeline[j]["f"].get("t_people") or {}).get(e["type_id"])
+                if tp is not None:
+                    break
+        if tp is not None:
+            t = tp
         e["t"] = round(t, 2)
         e["evidence_t"] = sorted({round(t, 2), round(min(t + 1.0, e["hi"]), 2)})
     return events
 
 
+PIPELINE = os.getenv("PIPELINE", "checks")  # checks — детектор + прицельная VLM (новое); windows — VLM по окнам
+
+
+def detect_events_checks(frames: list[tuple[float, Path]], meta: dict) -> list[dict]:
+    """Новая схема (pipeline/checks.py): кандидаты от детектора людей -> прицельные вопросы VLM по вырезу."""
+    from . import checks
+    from .vlm import describe, load
+
+    dets = people.detect(frames)
+    people.unload()
+    if not checks.NOVLM:
+        load()
+    deadline = meta.get("deadline")
+    events, cands = checks.run(frames, dets, None, deadline)
+    meta["candidates"] = [{"kind": c["kind"], "t": round(c["t"], 1), "answers": c.get("answers")} for c in cands]
+    for e in events[:5]:
+        e["description"] = f"Признак нарушения: {e['why']}."
+        if checks.NOVLM or (deadline and time.time() > deadline - 8):
+            continue
+        try:
+            act = describe(pick(frames, max(0.0, e["t"] - 1.0), e["t"] + 2.0, WINDOW_FRAMES))
+        except Exception:  # noqa: BLE001
+            act = ""
+        if act:
+            e["description"] = f"{act.rstrip('.')}. Признак нарушения: {e['why']}."
+    return events
+
+
 def detect_events(frames: list[tuple[float, Path]], meta: dict) -> list[dict]:
+    if PIPELINE == "checks" and people.enabled():
+        return detect_events_checks(frames, meta)
     from .vlm import describe
 
     sig = signals.compute(frames)

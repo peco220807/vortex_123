@@ -27,9 +27,14 @@ def load():
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
         _processor = AutoProcessor.from_pretrained(MODEL_ID)
+        extra = {}
+        if os.getenv("VLM_4BIT", "0") == "1" and torch.cuda.is_available():  # 4B не влезает в 6 ГБ в fp16
+            from transformers import BitsAndBytesConfig
+            extra["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.float16)
         _model = AutoModelForImageTextToText.from_pretrained(
             MODEL_ID, dtype=torch.float16, attn_implementation="sdpa",
-            device_map="cuda" if torch.cuda.is_available() else "cpu",
+            device_map="cuda" if torch.cuda.is_available() else "cpu", **extra,
         ).eval()
     return _model, _processor
 

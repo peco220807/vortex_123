@@ -45,9 +45,10 @@ out.mkdir(parents=True, exist_ok=True)
 if a.sides:
     for p in sorted(out.glob("*.json"), key=lambda p: int("".join(c for c in p.stem if c.isdigit()) or 0)):
         pj = json.loads(p.read_text(encoding="utf-8"))
-        sc = people.layout(pj["dets"])
-        print(f"{pj['video_id']:6} кассир: {people.side_name(sc['dir']):6} (геометрия, по «{sc['anchor_src']}»), "
-              f"VLM: {pj.get('side_hint')}")
+        g = people.diag(pj["dets"])
+        print(f"{pj['video_id']:6} кассир {g['side']:6} | людей в кадре {g['raw']:.1f} -> {g['kept']:.1f} после склейки"
+              f" | треков {g['tracks']:2}, кассир {g['cashier_tracks']}, фон {g['background']} | окон {g['windows']:2}: без кассира"
+              f" {g['no_cashier']:2}, за спиной {g['behind']:2}, чужой на месте {g['stranger']:2}, 2+ клиента {g['vis2']:2}")
     sys.exit(0)
 
 jobs = []

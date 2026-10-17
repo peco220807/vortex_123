@@ -18,6 +18,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pipeline.detector import events_from_timeline  # noqa: E402
+from pipeline.violation_types import TYPES  # noqa: E402
 from scripts.common import apply_people, norm  # noqa: E402
 
 ap = argparse.ArgumentParser()
@@ -29,6 +30,8 @@ a = ap.parse_args()
 
 labels = {norm(r["video_id"]): r for r in csv.DictReader(open(a.labels, encoding="utf-8"))}
 rows, per_rule_v, per_rule_c = [], Counter(), Counter()
+EXTRA_SEC = 5.0
+extra_total = type_ok = type_n = 0
 used_people, people_stats = 0, {}
 for p in sorted(Path(a.facts).glob("*.json"), key=lambda p: int(''.join(c for c in p.stem if c.isdigit()) or 0)):
     d = json.loads(p.read_text(encoding="utf-8"))
@@ -44,6 +47,16 @@ for p in sorted(Path(a.facts).glob("*.json"), key=lambda p: int(''.join(c for c 
     for tid in types:
         (per_rule_v if y else per_rule_c)[tid] += 1
     err = min((abs(e["t"] - t_true) for e in ev), default=None) if (y and ev) else None
+    # лишние срабатывания: всё на чистом видео; в видео с нарушением — события дальше EXTRA_SEC от метки
+    extra = len(ev) if not y else sum(abs(e["t"] - t_true) > EXTRA_SEC for e in ev) if t_true is not None else 0
+    extra_total += extra
+    # тип: если в разметке есть type_hypothesis, совпадающий с id или названием типа
+    want = (lab.get("type_hypothesis") or "").strip().lower()
+    want_id = next((k for k, v in TYPES.items() if want and (want == k or want == v["name"].lower())), None)
+    if y and want_id:
+        type_n += 1
+        near = [e["type_id"] for e in ev if abs(e["t"] - t_true) <= EXTRA_SEC]
+        type_ok += want_id in near
     rows.append((d["video_id"], y, bool(ev), t_true, err, types, [e["t"] for e in ev]))
 
 tp = sum(y and p for _, y, p, *_ in rows)
@@ -58,6 +71,9 @@ print(f"ЛОЖНЫЕ:   {fp}")
 if errs:
     print(f"Таймкод: медиана ошибки {np.median(errs):.1f} с, в пределах {a.tol:.0f} с: "
           f"{sum(e <= a.tol for e in errs)}/{len(errs)}")
+print(f"Лишние срабатывания: {extra_total} (на чистых видео + дальше {EXTRA_SEC:.0f} с от метки)")
+print(f"Тип нарушения угадан: {type_ok}/{type_n}" if type_n else
+      "Тип нарушения: в разметке нет type_hypothesis с id/названием типа — не считаю")
 print("\nСрабатывания правил (видео с нарушением / без):")
 for tid in sorted(set(per_rule_v) | set(per_rule_c)):
     print(f"  {tid:24} {per_rule_v[tid]:3} / {per_rule_c[tid]:3}")
