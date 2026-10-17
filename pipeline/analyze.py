@@ -6,8 +6,8 @@
 Сервис (Чел 2) вызывает только эту функцию. Внутренности меняем свободно,
 пока возвращается формат из pipeline/schema.py.
 
-Сейчас это ЗАГЛУШКА: детекторы пустые, поэтому всегда no_violation.
-Режим STUB_ALWAYS_VIOLATION=1 возвращает фейковое нарушение — для отладки сервиса и фронта.
+Поиск нарушений — pipeline/detector.py (окна по всему видео + локальная VLM).
+Режим STUB_ALWAYS_VIOLATION=1 возвращает фейковое нарушение — для отладки сервиса и фронта без модели.
 """
 import json
 import os
@@ -17,28 +17,41 @@ from pathlib import Path
 
 from .schema import make_result, make_violation, validate
 from .video_io import extract_frames, frame_b64, probe
+from .violation_types import TYPES
 
 RULES = json.loads((Path(__file__).resolve().parent.parent / "rules" / "rules.json").read_text(encoding="utf-8"))
 ANALYSIS_FPS = float(os.getenv("ANALYSIS_FPS", "2"))
 
 
 def detect_events(frames: list[tuple[float, Path]], meta: dict) -> list[dict]:
-    """Найти события-кандидаты.
-
-    Вернуть список: {"type_id": <ключ из rules.json>, "t": <сек>, "score": 0..1, "evidence_t": [сек, ...]}
-    TODO (Чел 1): детекция людей/объектов -> трекинг -> поза -> правила по типам.
-    """
+    """Список событий: {"type_id", "t", "score", "evidence_t", "description"}."""
     if os.getenv("STUB_ALWAYS_VIOLATION") == "1":
         t = meta["duration"] / 2
-        return [{"type_id": "example", "t": t, "score": 1.0, "evidence_t": [t]}]
-    return []
+        return [{"type_id": "unattended_valuables", "t": t, "score": 1.0, "evidence_t": [t],
+                 "description": "ТЕСТОВЫЙ РЕЖИМ: фейковое нарушение для отладки интерфейса."}]
+    from .detector import detect_events as run
+    return run(frames, meta)
+
+
+def short_source(src: dict) -> str:
+    """«Постановление ... № 231, пункты 20 и 22» — без длинного названия в кавычках «...»."""
+    doc = (src.get("document") or "").strip()
+    clause = (src.get("clause") or "").strip()
+    if not doc or doc.startswith("<"):
+        return ""
+    doc = doc.split("«")[0].strip().rstrip(",")
+    return doc + (f", {clause}" if clause and not clause.startswith("<") else "")
 
 
 def describe(event: dict) -> str:
-    """Текст обоснования: что видно + почему нарушение + источник."""
-    rule = RULES[event["type_id"]]
-    src = rule["source"]
-    return f'{rule["observation"]} {rule["why"]} Источник: {src["document"]}, {src["clause"]}.'
+    """Что видно (от VLM) + признак нарушения + норматив из rules.json (если Чел 3 заполнил). Источники не выдумываем."""
+    text = (event.get("description") or "").strip()
+    if not text:
+        text = f'На видео видны признаки: {TYPES[event["type_id"]]["visual"]}.'
+    src = short_source((RULES.get(event["type_id"]) or {}).get("source") or {})
+    if src:
+        text = text.rstrip(".") + f". Источник: {src}."
+    return text
 
 
 def analyze(video_path: str, threshold: float = 0.5, deadline: float | None = None) -> dict:
@@ -56,7 +69,7 @@ def analyze(video_path: str, threshold: float = 0.5, deadline: float | None = No
     violations = []
     for e in sorted(events, key=lambda e: e["t"]):
         ev = [{"timestamp_sec": round(t, 2), "image_base64": frame_b64(video_path, t)} for t in e["evidence_t"][:3]]
-        violations.append(make_violation(RULES[e["type_id"]]["name"], e["t"], describe(e), ev))
+        violations.append(make_violation(TYPES[e["type_id"]]["name"], e["t"], describe(e), ev))
 
     result = make_result(violations)
     validate(result)

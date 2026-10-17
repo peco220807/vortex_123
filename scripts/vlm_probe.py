@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pipeline.video_io import frame_at  # noqa: E402
 from pipeline.vlm import MODEL_ID, classify_window  # noqa: E402
+from pipeline.ffbin import ffprobe  # noqa: E402
 from scripts.common import find_video  # noqa: E402
 
 ap = argparse.ArgumentParser()
@@ -27,13 +28,13 @@ ap.add_argument("--labels", default="data/labels_clean.csv")
 ap.add_argument("--split", default="train")
 ap.add_argument("--window", type=float, default=3.0, help="± секунд вокруг момента")
 ap.add_argument("--n", type=int, default=6, help="кадров на окно")
-ap.add_argument("--width", type=int, default=640)
+ap.add_argument("--width", type=int, default=640, help="макс. ширина кадра (маленькие не растягиваются)")
 ap.add_argument("--limit", type=int, default=0)
 a = ap.parse_args()
 
 
 def duration(p):
-    return float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+    return float(subprocess.run([ffprobe(), "-v", "error", "-show_entries", "format=duration",
                                  "-of", "csv=p=0", str(p)], capture_output=True, text=True).stdout)
 
 

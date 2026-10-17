@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from pipeline.ffbin import ffmpeg, ffprobe  # noqa: E402
 from scripts.common import find_video  # noqa: E402
 
 ap = argparse.ArgumentParser()
@@ -33,7 +34,7 @@ for r in csv.DictReader(open(a.labels, encoding="utf-8")):
         continue
     t = float(r["timecode_sec"]) if r["timecode_sec"] else None
     if t is None:  # без нарушения — середина ролика
-        dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+        dur = float(subprocess.run([ffprobe(), "-v", "error", "-show_entries", "format=duration",
                                     "-of", "csv=p=0", str(vp)], capture_output=True, text=True).stdout)
         t = dur / 2
     start = max(t - a.window, 0)
@@ -51,7 +52,7 @@ for r in csv.DictReader(open(a.labels, encoding="utf-8")):
     for f in out.glob("f_*.jpg"):
         f.unlink()
     for vf in (f"{base},{label}", base):  # если подпись не вышла — кадры без неё
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{start}", "-t", f"{2 * a.window}", "-i", str(vp),
+        subprocess.run([ffmpeg(), "-v", "error", "-y", "-ss", f"{start}", "-t", f"{2 * a.window}", "-i", str(vp),
                         "-copyts", "-vf", vf, "-q:v", "3", str(out / "f_%03d.jpg")],
                        check=False, capture_output=True)
         if any(out.glob("f_*.jpg")):
@@ -61,7 +62,7 @@ for r in csv.DictReader(open(a.labels, encoding="utf-8")):
         continue
     n = int(2 * a.window * a.fps)
     cols = 4
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(out / "f_%03d.jpg"),
+    subprocess.run([ffmpeg(), "-v", "error", "-y", "-i", str(out / "f_%03d.jpg"),
                     "-vf", f"scale=480:-2,tile={cols}x{(n + cols - 1) // cols}", "-frames:v", "1",
                     str(out / "contact.jpg")], check=False, capture_output=True)
     print(f"[ok] {out}")
