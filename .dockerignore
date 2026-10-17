@@ -1,0 +1,5 @@
+data/videos
+data/frames_around
+preds
+.git
+.venv

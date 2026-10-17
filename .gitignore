@@ -1,0 +1,22 @@
+# ДАТАСЕТ НЕ ПОКИДАЕТ ЛОКАЛЬНЫЕ МАШИНЫ: ни видео, ни кадры, ни разметка, ни ответы на них.
+# GitHub — тоже облако. В git только код и data/README.md.
+data/*
+!data/README.md
+preds/
+*.xlsx
+*.csv
+*.mov
+*.mp4
+# веса моделей
+weights/
+*.pt
+*.pth
+*.onnx
+*.safetensors
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.ipynb_checkpoints/

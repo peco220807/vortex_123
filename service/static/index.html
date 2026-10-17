@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проверка кассовой дисциплины</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1b1f24; --muted:#5f6b7a; --ok:#1f8a4c; --bad:#c0392b; --line:#e3e6ea; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:960px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:22px; margin:0 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  .drop { border:2px dashed var(--line); border-radius:12px; padding:32px; text-align:center; cursor:pointer; }
+  .drop.over { border-color:#888; }
+  button { font:inherit; padding:8px 16px; border-radius:8px; border:0; background:#1b1f24; color:#fff; cursor:pointer; }
+  button:disabled { opacity:.5; }
+  .verdict { font-size:20px; font-weight:600; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); }
+  .muted { color:var(--muted); font-size:14px; }
+  .frames { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .frames img { width:100%; max-width:300px; border-radius:8px; border:1px solid var(--line); cursor:pointer; }
+  video { width:100%; border-radius:8px; margin-top:8px; }
+  .tc { font-variant-numeric: tabular-nums; cursor:pointer; text-decoration:underline; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Проверка кассовой дисциплины по видео</h1>
+  <div class="card">
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept=".mov,video/*" hidden>
+      <div id="dropText">Перетащите видео (.mov) или нажмите, чтобы выбрать</div>
+    </label>
+    <div style="margin-top:12px; display:flex; gap:12px; align-items:center">
+      <button id="go" disabled>Проверить</button>
+      <span id="status" class="muted"></span>
+    </div>
+    <video id="player" controls hidden></video>
+  </div>
+  <div id="result"></div>
+  <p class="muted">Результат — подсказка для проверяющего, а не окончательное заключение.</p>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let file = null;
+const pick = f => { file = f; $('dropText').textContent = f.name; $('go').disabled = false;
+  $('player').src = URL.createObjectURL(f); $('player').hidden = false; $('result').innerHTML = ''; };
+$('file').onchange = e => e.target.files[0] && pick(e.target.files[0]);
+const drop = $('drop');
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); e.dataTransfer.files[0] && pick(e.dataTransfer.files[0]); };
+const seek = t => { $('player').currentTime = t; $('player').scrollIntoView({behavior:'smooth'}); };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = t => `${Math.floor(t/60)}:${String(Math.floor(t%60)).padStart(2,'0')}.${Math.round((t%1)*10)}`;
+
+$('go').onclick = async () => {
+  $('go').disabled = true; $('status').textContent = 'Загрузка…'; $('result').innerHTML = '';
+  const fd = new FormData(); fd.append('file', file);
+  try {
+    const r = await fetch('/ui/analyze', { method:'POST', body:fd });
+    if (!r.ok) throw new Error(await r.text());
+    const { job_id } = await r.json();
+    const t0 = Date.now();
+    while (true) {
+      await new Promise(res => setTimeout(res, 2000));
+      const j = await (await fetch(`/ui/jobs/${job_id}`)).json();
+      $('status').textContent = `Анализ… ${Math.round((Date.now()-t0)/1000)} с`;
+      if (j.status === 'done') { render(j); $('status').textContent = 'Готово'; break; }
+      if (j.status === 'failed') throw new Error(j.error || 'ошибка обработки');
+    }
+  } catch (e) { $('status').textContent = 'Ошибка: ' + e.message; }
+  $('go').disabled = false;
+};
+
+function render(j) {
+  const bad = j.verdict === 'violation';
+  let h = `<div class="card"><div class="verdict ${bad?'bad':'ok'}">${bad?'Обнаружены признаки возможных нарушений':'Нарушение не обнаружено'}</div>`;
+  if (bad) h += `<div class="muted">Найдено: ${j.violations.length}</div>`;
+  h += `</div>`;
+  for (const v of j.violations) {
+    h += `<div class="card"><div><b>${esc(v.type)}</b> · <span class="tc" data-t="${v.timecode_sec}">${fmt(v.timecode_sec)}</span></div>
+      <p>${esc(v.description)}</p><div class="frames">`;
+    for (const f of v.evidence_frames)
+      h += `<figure style="margin:0"><img src="data:image/jpeg;base64,${f.image_base64}" data-t="${f.timestamp_sec}"><figcaption class="muted">${fmt(f.timestamp_sec)}</figcaption></figure>`;
+    h += `</div></div>`;
+  }
+  $('result').innerHTML = h;
+  document.querySelectorAll('[data-t]').forEach(el => el.onclick = () => seek(+el.dataset.t));
+}
+</script>
+</body>
+</html>
