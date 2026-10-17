@@ -12,7 +12,8 @@ import os
 import time
 from pathlib import Path
 
-from . import rules_engine, signals
+from . import rules_engine, signals, window_model
+from .violation_types import TYPES
 
 WINDOW_SEC = float(os.getenv("WINDOW_SEC", "4"))
 WINDOW_STEP = float(os.getenv("WINDOW_STEP", "4"))
@@ -83,12 +84,48 @@ def build_timeline(frames: list[tuple[float, Path]], meta: dict, sig: dict | Non
     return timeline
 
 
+MAX_EVENTS = int(os.getenv("MAX_EVENTS", "3"))
+
+
+def _classifier_events(timeline: list[dict], sig: dict, m: dict) -> list[dict]:
+    probs = window_model.predict(timeline, sig)
+    thr = float(os.getenv("CLF_THRESHOLD", m["threshold"]))
+    groups, cur = [], []
+    for i, p in enumerate(probs):
+        if p >= thr:
+            cur.append(i)
+        elif cur:
+            groups.append(cur)
+            cur = []
+    if cur:
+        groups.append(cur)
+    rule_events = rules_engine.apply(timeline)
+    events = []
+    for g in groups:
+        best = max(g, key=lambda i: probs[i])
+        tid = window_model.guess_type(timeline, best)
+        why = next((e["why"] for e in rule_events if e["type_id"] == tid
+                    and e["first_i"] - 1 <= best <= e["last_i"] + 1), TYPES[tid]["visual"])
+        act = timeline[best]["f"].get("action", "")
+        events.append({"type_id": tid, "first_i": g[0], "last_i": g[-1], "peak_i": best, "n": len(g), "why": why,
+                       "lo": timeline[g[0]]["lo"], "hi": timeline[g[-1]]["hi"], "score": float(max(probs[g])),
+                       "description": (f"{act.rstrip('.')}. " if act else "") + f"Признак нарушения: {why}."})
+    events.sort(key=lambda e: -e["score"])
+    return sorted(events[:MAX_EVENTS], key=lambda e: e["lo"])
+
+
 def events_from_timeline(timeline: list[dict], sig: dict) -> list[dict]:
-    events = rules_engine.apply(timeline)
+    m = window_model.load()
+    events = _classifier_events(timeline, sig, m) if m and timeline else rules_engine.apply(timeline)
     for e in events:
         # нарушение часто начинается на стыке окон (кассир ушёл между ними) — ищем пик и в предыдущем окне
-        lo = timeline[e["first_i"] - 1]["lo"] if e.get("first_i") else e["lo"]
-        t = signals.peak_motion_time(sig, lo, min(e["hi"], e["lo"] + WINDOW_SEC))
+        if "peak_i" in e:  # классификатор: ищем момент в окне с максимальной вероятностью (и стыке с предыдущим)
+            i = e["peak_i"]
+            lo, hi = (timeline[i - 1]["lo"] if i else timeline[i]["lo"]), timeline[i]["hi"]
+        else:
+            lo = timeline[e["first_i"] - 1]["lo"] if e.get("first_i") else e["lo"]
+            hi = min(e["hi"], e["lo"] + WINDOW_SEC)
+        t = signals.peak_motion_time(sig, lo, hi)
         t = (e["lo"] + e["hi"]) / 2 if t is None else t
         e["t"] = round(t, 2)
         e["evidence_t"] = sorted({round(t, 2), round(min(t + 1.0, e["hi"]), 2)})
