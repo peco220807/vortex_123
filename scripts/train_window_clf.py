@@ -6,9 +6,13 @@
   pip install scikit-learn joblib
   python scripts\\train_window_clf.py              # сравнить модели, сохранить лучшую в models/
   python scripts\\train_window_clf.py --no-save
+  python scripts\\train_window_clf.py --ids        # показать ID видео в ошибках (не пересылать наружу!)
 
-Разметка окна: в видео с нарушением окно, пересекающее [t-2, t+2], — «нарушение»; окна дальше 8 с от t
-не используются (там могут быть другие, неразмеченные нарушения); все окна чистых видео — «норма».
+Разметка окна: в видео с нарушением окно, пересекающее [t-2, t+2], — «нарушение»; окна в 2..8 с от t
+не используются (переходная зона); окна дальше 8 с — «норма»; все окна чистых видео — «норма».
+
+Перебираются модели (logreg, forest) и агрегации окон (max, pair, ctx — см. pipeline/window_model.py).
+Выбор: не больше 1 пропуска, затем минимум ошибок.
 """
 import argparse
 import csv
@@ -20,13 +24,15 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pipeline import signals  # noqa: E402
-from pipeline.window_model import MODEL_PATH, features  # noqa: E402
-from scripts.common import norm  # noqa: E402
+from pipeline.window_model import AGGS, MODEL_PATH, features, smooth  # noqa: E402
+from scripts.common import apply_people, norm  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--facts", default="data/facts")
 ap.add_argument("--labels", default="data/labels_clean.csv")
 ap.add_argument("--no-save", action="store_true")
+ap.add_argument("--ids", action="store_true", help="печатать ID видео в списках ошибок")
+ap.add_argument("--people", default="", help="папка с рамками детектора (data/people)")
 a = ap.parse_args()
 
 from sklearn.ensemble import RandomForestClassifier  # noqa: E402
@@ -42,6 +48,7 @@ for p in sorted(Path(a.facts).glob("*.json")):
     if not lab or lab["split"] != "train" or not d["timeline"]:
         continue
     sig = {k: np.array(v) for k, v in d["sig"].items()}
+    apply_people(d, a.people)
     X, names = features(d["timeline"], sig)
     y_vid = lab["violation"] == "1"
     t = float(lab["timecode_sec"]) if lab["timecode_sec"] else None
@@ -83,6 +90,13 @@ def loo(make):
     return out
 
 
+THRESHOLDS = {
+    "max": [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+    "pair": [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+    "ctx": [0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6],
+}
+
+
 def timecode(v, probs):
     i = int(np.argmax(probs))
     lo = v["timeline"][i - 1]["lo"] if i else v["timeline"][i]["lo"]
@@ -90,44 +104,61 @@ def timecode(v, probs):
     return (v["timeline"][i]["lo"] + v["timeline"][i]["hi"]) / 2 if t is None else t
 
 
-def report(name, probs):
-    scores = np.array([p.max() for p in probs])
+def ids(lst):
+    return lst if a.ids else len(lst)
+
+
+def report(name, raw_probs, agg):
+    probs = [smooth(p, agg) for p in raw_probs]
+    scores = np.array([p.max() if len(p) else 0.0 for p in probs])
     ys = np.array([v["y"] for v in videos])
-    print(f"\n=== {name} (проверка на невиденных видео) ===")
+    print(f"\n=== {name} + {agg} (проверка на невиденных видео) ===")
     print(" порог | пропуски | ложные | точность")
     best = None
-    for thr in [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
+    for thr in THRESHOLDS[agg]:
         pred = scores >= thr
         fn, fp = int((ys & ~pred).sum()), int((~ys & pred).sum())
         acc = (pred == ys).mean()
-        print(f"  {thr:.1f}  |   {fn:3}    |  {fp:3}   |  {acc:.0%}")
+        print(f"  {thr:<4} |   {fn:3}    |  {fp:3}   |  {acc:.0%}")
         key = (fn > 1, fp + fn, fn)  # не больше 1 пропуска, затем минимум ошибок
         if best is None or key < best[0]:
             best = (key, thr, fn, fp, acc)
-    _, thr, fn, fp, acc = best
+    key, thr, fn, fp, acc = best
     errs = [abs(timecode(v, p) - v["t"]) for v, p, s in zip(videos, probs, scores) if v["y"] and s >= thr]
     miss = [v["id"] for v, s in zip(videos, scores) if v["y"] and s < thr]
     false = [v["id"] for v, s in zip(videos, scores) if not v["y"] and s >= thr]
-    print(f" выбран порог {thr}: точность {acc:.0%}, пропуски {miss}, ложные {false}")
+    print(f" выбран порог {thr}: точность {acc:.0%}, пропуски {ids(miss)}, ложные {ids(false)}")
     if errs:
         print(f" таймкод: медиана ошибки {np.median(errs):.1f} с, в пределах 3 с: "
               f"{sum(e <= 3 for e in errs)}/{len(errs)}")
-    return (fn > 1, fp + fn, fn), thr
+    return key, thr, acc
 
 
-results = {name: report(name, loo(make)) for name, make in MODELS.items()}
-best_name = min(results, key=lambda k: results[k][0])
-thr = results[best_name][1]
-print(f"\nЛучшая модель: {best_name}, порог {thr}")
+base_rate = max(np.mean([v["y"] for v in videos]), 1 - np.mean([v["y"] for v in videos]))
+results = {}
+for name, make in MODELS.items():
+    raw = loo(make)  # LOO один раз на модель, агрегации — поверх
+    for agg in AGGS:
+        results[(name, agg)] = report(name, raw, agg)
 
+(best_name, best_agg) = min(results, key=lambda k: results[k][0])
+_, thr, acc = results[(best_name, best_agg)]
+print(f"\nЛучшая: {best_name} + {best_agg}, порог {thr}, точность {acc:.0%} "
+      f"(угадайка «всегда один ответ»: {base_rate:.0%})")
+if acc < base_rate + 0.10 and not a.no_save:
+    print("Модель НЕ лучше угадайки хотя бы на 10% — НЕ сохраняю (сервис будет работать на правилах).")
+    if MODEL_PATH.exists():
+        print(f"Внимание: старый {MODEL_PATH} остался — удалите его, если он тоже плохой.")
+    a.no_save = True
+
+clf = fit(MODELS[best_name], videos)
 if best_name == "forest":
-    clf = fit(MODELS[best_name], videos)
     top = sorted(zip(clf.feature_importances_, names), reverse=True)[:10]
     print("Самые важные признаки:", ", ".join(f"{n} {w:.2f}" for w, n in top))
 
 if not a.no_save:
     import joblib
     MODEL_PATH.parent.mkdir(exist_ok=True)
-    joblib.dump({"clf": fit(MODELS[best_name], videos), "threshold": thr, "kind": best_name,
-                 "features": names}, MODEL_PATH)
+    joblib.dump({"clf": clf, "threshold": thr, "kind": best_name, "agg": best_agg,
+                 "features": list(names)}, MODEL_PATH)
     print(f"Сохранено: {MODEL_PATH}")

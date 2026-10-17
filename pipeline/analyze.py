@@ -73,6 +73,7 @@ def analyze(video_path: str, threshold: float = 0.5, deadline: float | None = No
 
     result = make_result(violations)
     validate(result)
+    meta.pop("people", None)  # сырые рамки детектора — большие, в ответ API не нужны
     result["_debug"] = {"elapsed_sec": round(time.time() - t0, 1), "n_frames": len(frames), **meta}
     return result
 
