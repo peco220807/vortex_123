@@ -43,20 +43,34 @@ def pick(frames: list[tuple[float, Path]], lo: float, hi: float, n: int) -> list
 
 def build_timeline(frames: list[tuple[float, Path]], meta: dict, sig: dict | None = None) -> list[dict]:
     """Факты VLM по каждому окну, по порядку времени. Останавливается у deadline."""
-    from .vlm import observe  # тяжёлый импорт — только когда нужен
+    from .vlm import load, observe  # тяжёлый импорт — только когда нужен
 
+    load()  # загрузка модели не должна попадать в замер скорости окон
     deadline = meta.get("deadline")
     sig = sig or signals.compute(frames)
     drops = signals.light_drops(sig)
     wins = windows(meta["duration"], drops)
-    timeline, skipped = [], 0
-    t_start, done = time.time(), 0
-    queue = list(wins)
-    while queue:
-        lo, hi = queue.pop(0)
+    budget = TIME_BUDGET_SEC
+    if deadline:
+        budget = min(budget, deadline - time.time() - VLM_RESERVE_SEC)
+    timeline, done, t_start = [], 0, time.time()
+    rest = list(wins)  # ещё не обработанные окна, по времени
+    while rest:
+        elapsed = time.time() - t_start
         if deadline and time.time() > deadline - VLM_RESERVE_SEC:
-            skipped += 1 + len(queue)
             break
+        # сколько окон ещё успеем при текущей скорости; если меньше, чем осталось, — шагаем через окна,
+        # но каждый раз пересчитываем (если модель ускорилась, снова идём подряд)
+        if done >= 2:
+            per = elapsed / done
+            can = int((budget - elapsed) / per)
+            if can <= 0:
+                break
+            stride = max(1, round(len(rest) / can)) if can < len(rest) else 1
+        else:
+            stride = 1
+        lo, hi = rest[0]
+        rest = rest[stride:]
         imgs = pick(frames, lo, hi, WINDOW_FRAMES)
         if len(imgs) < 2:
             continue
@@ -64,15 +78,7 @@ def build_timeline(frames: list[tuple[float, Path]], meta: dict, sig: dict | Non
         done += 1
         f["lights_off"] = f["lights_off"] or any(lo <= d <= hi for d in drops)
         timeline.append({"lo": lo, "hi": hi, "f": f})
-        # реальная скорость известна — если не успеваем в бюджет, прореживаем оставшиеся окна
-        per = (time.time() - t_start) / done
-        left = TIME_BUDGET_SEC - (time.time() - t_start)
-        if done >= 2 and queue and len(queue) * per > left:
-            keep = max(1, int(left / per))
-            k = len(queue) / keep
-            thinned = [queue[min(len(queue) - 1, int(i * k))] for i in range(keep)]
-            skipped += len(queue) - len(thinned)
-            queue = thinned
+    skipped = len(wins) - len(timeline)
     meta.update(windows_total=len(wins), windows_skipped=skipped, light_drops=drops)
     return timeline
 

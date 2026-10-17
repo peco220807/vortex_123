@@ -19,6 +19,9 @@ from pipeline import signals  # noqa: E402
 from pipeline.analyze import ANALYSIS_FPS  # noqa: E402
 from pipeline import detector  # noqa: E402
 from pipeline.detector import build_timeline  # noqa: E402
+
+# для настройки нужны ПОЛНЫЕ факты по всем окнам — без прореживания под лимит жюри
+detector.TIME_BUDGET_SEC = 1e9
 from pipeline.video_io import extract_frames, probe  # noqa: E402
 from scripts.common import find_video, norm  # noqa: E402
 
