@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pipeline import signals  # noqa: E402
 from pipeline.analyze import ANALYSIS_FPS  # noqa: E402
+from pipeline import detector  # noqa: E402
 from pipeline.detector import build_timeline  # noqa: E402
 from pipeline.video_io import extract_frames, probe  # noqa: E402
 from scripts.common import find_video, norm  # noqa: E402
@@ -46,6 +47,7 @@ for r in csv.DictReader(open(a.labels, encoding="utf-8")):
         print(f"[нет файла] {vid}")
         continue
     t0 = time.time()
+    print(f"... {vid}", end="", flush=True)
     meta = probe(str(vp))
     with tempfile.TemporaryDirectory() as tmp:
         frames = extract_frames(str(vp), tmp, fps=ANALYSIS_FPS)
@@ -58,5 +60,6 @@ for r in csv.DictReader(open(a.labels, encoding="utf-8")):
         "sig": {k: [round(float(x), 4) for x in v] for k, v in sig.items()},
     }, ensure_ascii=False), encoding="utf-8")
     bad = sum(not w["f"]["parsed"] for w in timeline)
-    print(f"[ok] {vid}: {len(timeline)} окон за {time.time() - t0:.0f} с"
+    print(f"\r[ok] {vid}: {len(timeline)} окон за {time.time() - t0:.0f} с "
+          f"({(time.time() - t0) / max(1, len(timeline)):.1f} с/окно, пропущено {meta.get('windows_skipped', 0)})"
           + (f", НЕ РАЗОБРАНО ответов: {bad}" if bad else ""))

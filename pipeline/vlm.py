@@ -124,13 +124,20 @@ FACTS = {
     "touching_equipment": "is someone touching the laptop, money counter or items on the cashier desk",
 }
 
+KEYS = list(FACTS)
+
 OBSERVE_PROMPT = (
     "These frames come from a ceiling camera above a bank cashier desk, in time order. "
-    "Answer strictly about what is VISIBLE. Do not guess. Do not describe faces.\n"
-    "Return ONE line of JSON with exactly these keys:\n"
-    + "\n".join(f'- "{k}": {v}' for k, v in FACTS.items())
-    + '\n- "action": one short sentence IN RUSSIAN describing what the people do in these frames\n'
-    "Use true/false for yes/no questions and integers for counts."
+    "Answer strictly about what is VISIBLE. Do not guess.\n"
+    f"Answer the {len(FACTS)} questions below IN THIS ORDER with numbers only, separated by spaces, "
+    "on one line. Counts: integer. Yes/no: 1 or 0. No words, no explanation.\n"
+    + "\n".join(f"{i + 1}. {v}" for i, v in enumerate(FACTS.values()))
+)
+
+DESCRIBE_PROMPT = (
+    "These frames come from a ceiling camera above a bank cashier desk, in time order. "
+    "In ONE short sentence IN RUSSIAN describe what the people are doing with money, bags, the safe or "
+    "equipment. Only what is visible. Do not describe faces or appearance."
 )
 
 
@@ -150,11 +157,21 @@ def _as_int(v) -> int:
 
 
 def parse_facts(text: str) -> dict:
-    m = re.search(r"\{.*\}", text, re.S)
-    try:
-        d = json.loads(m.group(0)) if m else {}
-    except json.JSONDecodeError:
-        d = {}
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if sum(bool(re.match(r"\s*\d+[.):]\s*\S", ln)) for ln in lines) >= len(KEYS) // 2:
+        # ответ нумерованным списком «1. 2» — берём последнее число в каждой строке
+        nums = [re.findall(r"-?\d+", ln)[-1] for ln in lines if re.findall(r"-?\d+", ln)]
+    else:
+        nums = re.findall(r"-?\d+", text)
+    d = {}
+    if len(nums) >= len(KEYS):
+        d = dict(zip(KEYS, nums[:len(KEYS)]))
+    else:
+        m = re.search(r"\{.*\}", text, re.S)
+        try:
+            d = json.loads(m.group(0)) if m else {}
+        except json.JSONDecodeError:
+            d = {}
     out = {}
     for k in FACTS:
         out[k] = _as_int(d.get(k)) if k.endswith("_count") else _as_bool(d.get(k))
@@ -163,9 +180,14 @@ def parse_facts(text: str) -> dict:
     return out
 
 
-def observe(frames: list[tuple[float, bytes]], max_new_tokens: int = 220) -> dict:
-    """Факты об окне: {people_count, cashier_at_desk, money_on_desk, ..., action, parsed, raw}."""
+def observe(frames: list[tuple[float, bytes]], max_new_tokens: int = 48) -> dict:
+    """Факты об окне: {people_count, cashier_at_desk, money_on_desk, ..., parsed, raw}."""
     text = _generate(frames, OBSERVE_PROMPT, max_new_tokens)
     f = parse_facts(text)
     f["raw"] = text.strip()
     return f
+
+
+def describe(frames: list[tuple[float, bytes]], max_new_tokens: int = 60) -> str:
+    """Одна фраза по-русски о том, что происходит (только для окон с найденным нарушением)."""
+    return _generate(frames, DESCRIBE_PROMPT, max_new_tokens).strip().split("\n")[0]

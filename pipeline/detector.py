@@ -18,7 +18,7 @@ WINDOW_SEC = float(os.getenv("WINDOW_SEC", "4"))
 WINDOW_STEP = float(os.getenv("WINDOW_STEP", "4"))
 WINDOW_FRAMES = int(os.getenv("WINDOW_FRAMES", "4"))
 TIME_BUDGET_SEC = float(os.getenv("TIME_BUDGET_SEC", "170"))   # на все окна VLM (лимит жюри 300 с)
-SEC_PER_WINDOW = float(os.getenv("SEC_PER_WINDOW", "4.5"))     # замер на RTX 4050, 4 кадра по 448 px
+SEC_PER_WINDOW = float(os.getenv("SEC_PER_WINDOW", "4.5"))     # стартовая оценка; дальше — по замеру
 VLM_RESERVE_SEC = float(os.getenv("VLM_RESERVE_SEC", "15"))
 
 
@@ -50,16 +50,29 @@ def build_timeline(frames: list[tuple[float, Path]], meta: dict, sig: dict | Non
     drops = signals.light_drops(sig)
     wins = windows(meta["duration"], drops)
     timeline, skipped = [], 0
-    for lo, hi in wins:
+    t_start, done = time.time(), 0
+    queue = list(wins)
+    while queue:
+        lo, hi = queue.pop(0)
         if deadline and time.time() > deadline - VLM_RESERVE_SEC:
-            skipped += 1
-            continue
+            skipped += 1 + len(queue)
+            break
         imgs = pick(frames, lo, hi, WINDOW_FRAMES)
         if len(imgs) < 2:
             continue
         f = observe(imgs)
+        done += 1
         f["lights_off"] = f["lights_off"] or any(lo <= d <= hi for d in drops)
         timeline.append({"lo": lo, "hi": hi, "f": f})
+        # реальная скорость известна — если не успеваем в бюджет, прореживаем оставшиеся окна
+        per = (time.time() - t_start) / done
+        left = TIME_BUDGET_SEC - (time.time() - t_start)
+        if done >= 2 and queue and len(queue) * per > left:
+            keep = max(1, int(left / per))
+            k = len(queue) / keep
+            thinned = [queue[min(len(queue) - 1, int(i * k))] for i in range(keep)]
+            skipped += len(queue) - len(thinned)
+            queue = thinned
     meta.update(windows_total=len(wins), windows_skipped=skipped, light_drops=drops)
     return timeline
 
@@ -77,7 +90,20 @@ def events_from_timeline(timeline: list[dict], sig: dict) -> list[dict]:
 
 
 def detect_events(frames: list[tuple[float, Path]], meta: dict) -> list[dict]:
+    from .vlm import describe
+
     sig = signals.compute(frames)
     timeline = build_timeline(frames, meta, sig)
     meta["timeline_windows"] = len(timeline)
-    return events_from_timeline(timeline, sig)
+    events = events_from_timeline(timeline, sig)
+    deadline = meta.get("deadline")
+    for e in events[:5]:  # фраза «что видно» — только для найденных событий
+        if deadline and time.time() > deadline - 8:
+            break
+        try:
+            act = describe(pick(frames, max(0.0, e["t"] - 1.5), e["t"] + 2.5, WINDOW_FRAMES))
+        except Exception:  # noqa: BLE001 — без фразы ответ всё равно валиден
+            act = ""
+        if act:
+            e["description"] = f"{act.rstrip('.')}. Признак нарушения: {e['why']}."
+    return events
