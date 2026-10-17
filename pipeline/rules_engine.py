@@ -29,7 +29,10 @@ def apply(timeline: list[dict]) -> list[dict]:
         f = w["f"]
         prev = timeline[i - 1]["f"] if i else {}
         cashier = f["cashier_at_desk"]
-        others_on_cashier_side = f["people_count"] - f["visitor_count"] - (1 if cashier else 0)
+        if "behind_cashier" in f:  # факты от детектора людей (pipeline/people.py): по зонам, а не подсчётом
+            others_on_cashier_side = int(bool(f["behind_cashier"]))
+        else:
+            others_on_cashier_side = f["people_count"] - f["visitor_count"] - (1 if cashier else 0)
 
         # 1. Ценности без присмотра: деньги/сумка на столе, кассир уже работал и ушёл с места
         if cashier_seen and not cashier and (f["money_on_desk"] or f["bag_on_desk"]):
@@ -51,7 +54,9 @@ def apply(timeline: list[dict]) -> list[dict]:
 
         # 4. Посторонний: в кабинете кто-то есть, кассира на месте нет, человек входит или трогает технику;
         #    или лишний человек на стороне кассира
-        if f["people_count"] >= 1 and not cashier and (
+        if f.get("stranger_at_desk"):  # детектор: кассира нет, а на его месте кто-то есть
+            hits.append((i, "unauthorized_person", "на рабочем месте кассира находится посторонний, кассира нет"))
+        elif f["people_count"] >= 1 and not cashier and (
                 f["touching_equipment"] or f["counting_machine_used"] or f["person_entering"]):
             hits.append((i, "unauthorized_person", "в кассовой зоне находится человек в отсутствие кассира"))
         elif cashier and others_on_cashier_side >= 1:

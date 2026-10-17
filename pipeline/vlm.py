@@ -206,3 +206,24 @@ def observe(frames: list[tuple[float, bytes]], max_new_tokens: int = 80) -> dict
 def describe(frames: list[tuple[float, bytes]], max_new_tokens: int = 60) -> str:
     """Одна фраза по-русски о том, что происходит (только для окон с найденным нарушением)."""
     return _generate(frames, DESCRIBE_PROMPT, max_new_tokens).strip().split("\n")[0]
+
+
+# ---------- Раскладка сцены: один вопрос на видео (pipeline/people.py) ----------
+
+SIDE_PROMPT = (
+    "These frames come from a fixed ceiling camera in a bank cashier room. Find the cashier's workplace: "
+    "the desk with a laptop and a money counting machine. The cashier sits on the side of the desk that the "
+    "laptop SCREEN and the money counter DISPLAY face. On which side of the IMAGE is the cashier's seat "
+    "relative to the desk? Answer with ONE word: left, right, top or bottom."
+)
+
+
+def cashier_side(frames: list[tuple[float, bytes]], max_new_tokens: int = 5) -> str | None:
+    """'left' | 'right' | 'top' | 'bottom' | None — где сторона кассира относительно стола на кадре."""
+    text = _generate(frames, SIDE_PROMPT, max_new_tokens).strip().lower()
+    for word, side in (("left", "left"), ("right", "right"), ("top", "top"), ("bottom", "bottom"),
+                       ("слева", "left"), ("справа", "right"), ("сверху", "top"), ("снизу", "bottom"),
+                       ("up", "top"), ("down", "bottom")):
+        if word in text:
+            return side
+    return None

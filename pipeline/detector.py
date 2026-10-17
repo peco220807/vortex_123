@@ -3,6 +3,8 @@
 1. Видео делится на окна (по умолчанию 4 с, шаг 4 с; для длинных видео шаг растёт, чтобы уложиться в бюджет).
    + отдельное окно на каждое резкое потемнение (выключили свет).
 2. В каждом окне VLM отвечает на ФАКТЫ (кто есть, деньги на столе, сейф открыт, ...) — pipeline/vlm.py.
+   Факты о ЛЮДЯХ (сколько, кассир на месте, посетители, вошёл/вышел, кто-то за спиной кассира) заменяются
+   посчитанными по детектору людей относительно рабочего места — pipeline/people.py (PEOPLE_DET=0 — выключить).
 3. Правила (pipeline/rules_engine.py) по последовательности фактов решают, есть ли нарушение.
 4. Таймкод — пик движения в первом окне события; кадры-доказательства — оттуда же.
 
@@ -12,7 +14,7 @@ import os
 import time
 from pathlib import Path
 
-from . import rules_engine, signals, window_model
+from . import people, rules_engine, signals, window_model
 from .violation_types import TYPES
 
 WINDOW_SEC = float(os.getenv("WINDOW_SEC", "4"))
@@ -44,10 +46,24 @@ def pick(frames: list[tuple[float, Path]], lo: float, hi: float, n: int) -> list
 
 def build_timeline(frames: list[tuple[float, Path]], meta: dict, sig: dict | None = None) -> list[dict]:
     """Факты VLM по каждому окну, по порядку времени. Останавливается у deadline."""
-    from .vlm import load, observe  # тяжёлый импорт — только когда нужен
+    from .vlm import cashier_side, load, observe  # тяжёлый импорт — только когда нужен
 
-    load()  # загрузка модели не должна попадать в замер скорости окон
     deadline = meta.get("deadline")
+    dets = None
+    if people.enabled():
+        try:
+            dets = people.detect(frames)  # быстро (секунды); до загрузки VLM, чтобы не делить видеопамять
+            people.unload()
+        except Exception as e:  # noqa: BLE001 — без детектора работаем как раньше, на фактах VLM
+            print(f"[people] детектор не сработал: {e!r}")
+            dets = None
+    load()  # загрузка модели не должна попадать в замер скорости окон
+    side = None
+    if dets is not None:
+        try:
+            side = cashier_side(pick(frames, 0.0, meta["duration"], 3))
+        except Exception:  # noqa: BLE001
+            side = None
     sig = sig or signals.compute(frames)
     drops = signals.light_drops(sig)
     wins = windows(meta["duration"], drops)
@@ -81,6 +97,10 @@ def build_timeline(frames: list[tuple[float, Path]], meta: dict, sig: dict | Non
         timeline.append({"lo": lo, "hi": hi, "f": f})
     skipped = len(wins) - len(timeline)
     meta.update(windows_total=len(wins), windows_skipped=skipped, light_drops=drops)
+    if dets is not None:
+        scene = people.merge(timeline, dets, side)
+        meta["people"] = {"dets": dets, "side_hint": side}
+        meta["scene"] = {k: scene[k] for k in ("anchor_src", "dir_src")}
     return timeline
 
 

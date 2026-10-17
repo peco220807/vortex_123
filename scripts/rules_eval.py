@@ -2,6 +2,7 @@
 
   python scripts\\rules_eval.py
   python scripts\\rules_eval.py --tol 3
+  python scripts\\rules_eval.py --people data\\people   # факты о людях — от детектора (scripts/people_dump.py)
   set RULES_OFF=mixed_operations,cash_intake_procedure   (выключить правила и сравнить)
 
 Печатает только сводку — её можно пересылать (там нет кадров).
@@ -17,22 +18,25 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pipeline.detector import events_from_timeline  # noqa: E402
-from scripts.common import norm  # noqa: E402
+from scripts.common import apply_people, norm  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--facts", default="data/facts")
 ap.add_argument("--labels", default="data/labels_clean.csv")
 ap.add_argument("--tol", type=float, default=3.0, help="допуск по таймкоду, сек")
+ap.add_argument("--people", default="", help="папка с рамками детектора (data/people)")
 a = ap.parse_args()
 
 labels = {norm(r["video_id"]): r for r in csv.DictReader(open(a.labels, encoding="utf-8"))}
 rows, per_rule_v, per_rule_c = [], Counter(), Counter()
+used_people, people_stats = 0, {}
 for p in sorted(Path(a.facts).glob("*.json"), key=lambda p: int(''.join(c for c in p.stem if c.isdigit()) or 0)):
     d = json.loads(p.read_text(encoding="utf-8"))
     lab = labels.get(norm(d["video_id"]))
     if not lab:
         continue
     sig = {k: np.array(v) for k, v in d["sig"].items()}
+    used_people += apply_people(d, a.people, people_stats)
     ev = events_from_timeline(d["timeline"], sig)
     y = lab["violation"] == "1"
     t_true = float(lab["timecode_sec"]) if lab["timecode_sec"] else None
@@ -62,3 +66,8 @@ for v, y, p, t_true, err, types, ts in rows:
     mark = "OK " if y == p else "ERR"
     print(f"  {mark} {v:6} метка={'Н' if y else '-'}{'' if t_true is None else f'@{t_true:.0f}'} "
           f"найдено={','.join(types) or '-'} t={ts[:3]}" + (f" ошибка={err:.1f}" if err is not None else ""))
+
+if a.people:
+    n = people_stats.get("n", 0)
+    print(f"\nДетектор людей: подставлен в {used_people} видео; «кассир на месте» совпадает с VLM "
+          f"в {people_stats.get('same', 0)}/{n} окон" + (f" ({people_stats.get('same', 0) / n:.0%})" if n else ""))

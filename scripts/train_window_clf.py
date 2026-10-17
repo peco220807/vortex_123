@@ -25,13 +25,14 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pipeline import signals  # noqa: E402
 from pipeline.window_model import AGGS, MODEL_PATH, features, smooth  # noqa: E402
-from scripts.common import norm  # noqa: E402
+from scripts.common import apply_people, norm  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--facts", default="data/facts")
 ap.add_argument("--labels", default="data/labels_clean.csv")
 ap.add_argument("--no-save", action="store_true")
 ap.add_argument("--ids", action="store_true", help="печатать ID видео в списках ошибок")
+ap.add_argument("--people", default="", help="папка с рамками детектора (data/people)")
 a = ap.parse_args()
 
 from sklearn.ensemble import RandomForestClassifier  # noqa: E402
@@ -47,6 +48,7 @@ for p in sorted(Path(a.facts).glob("*.json")):
     if not lab or lab["split"] != "train" or not d["timeline"]:
         continue
     sig = {k: np.array(v) for k, v in d["sig"].items()}
+    apply_people(d, a.people)
     X, names = features(d["timeline"], sig)
     y_vid = lab["violation"] == "1"
     t = float(lab["timecode_sec"]) if lab["timecode_sec"] else None
@@ -143,6 +145,11 @@ for name, make in MODELS.items():
 _, thr, acc = results[(best_name, best_agg)]
 print(f"\nЛучшая: {best_name} + {best_agg}, порог {thr}, точность {acc:.0%} "
       f"(угадайка «всегда один ответ»: {base_rate:.0%})")
+if acc < base_rate + 0.10 and not a.no_save:
+    print("Модель НЕ лучше угадайки хотя бы на 10% — НЕ сохраняю (сервис будет работать на правилах).")
+    if MODEL_PATH.exists():
+        print(f"Внимание: старый {MODEL_PATH} остался — удалите его, если он тоже плохой.")
+    a.no_save = True
 
 clf = fit(MODELS[best_name], videos)
 if best_name == "forest":
