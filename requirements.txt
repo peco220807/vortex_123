@@ -5,3 +5,4 @@ python-multipart>=0.0.9
 # ML (Чел 1 дополняет; только лицензии с коммерческим использованием, без AGPL/Ultralytics)
 numpy
 opencv-python-headless
+openpyxl
