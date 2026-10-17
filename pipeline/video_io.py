@@ -4,11 +4,13 @@ import json
 import subprocess
 from pathlib import Path
 
+from .ffbin import ffmpeg, ffprobe
+
 
 def probe(video_path: str) -> dict:
     """Длительность, fps и размер кадра."""
     out = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+        [ffprobe(), "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=width,height,r_frame_rate:format=duration",
          "-of", "json", str(video_path)],
         capture_output=True, text=True, check=True,
@@ -24,25 +26,30 @@ def probe(video_path: str) -> dict:
     }
 
 
+def _scale(width: int) -> str:
+    # уменьшаем до width, но маленькие видео не растягиваем
+    return f"scale='min(iw,{width})':-2"
+
+
 def extract_frames(video_path: str, out_dir: str, fps: float = 2.0, width: int = 960) -> list[tuple[float, Path]]:
     """Нарезать кадры с частотой fps. Возвращает [(timestamp_sec, path), ...]."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        ["ffmpeg", "-v", "error", "-y", "-i", str(video_path),
-         "-vf", f"fps={fps},scale={width}:-2", "-q:v", "3", str(out / "f_%05d.jpg")],
+        [ffmpeg(), "-v", "error", "-y", "-i", str(video_path),
+         "-vf", f"fps={fps},{_scale(width)}", "-q:v", "3", str(out / "f_%05d.jpg")],
         check=True,
     )
     frames = sorted(out.glob("f_*.jpg"))
-    # кадр N (с 1) при fps=k соответствует ~ (N-1)/k + 0.5/k секунде
-    return [((i + 0.5) / fps, p) for i, p in enumerate(frames)]
+    # фильтр fps выдаёт i-й кадр в момент i/fps
+    return [(i / fps, p) for i, p in enumerate(frames)]
 
 
 def frame_at(video_path: str, t: float, width: int = 960) -> bytes:
     """Один JPEG-кадр в момент t (сек)."""
     return subprocess.run(
-        ["ffmpeg", "-v", "error", "-ss", f"{max(t, 0):.3f}", "-i", str(video_path),
-         "-frames:v", "1", "-vf", f"scale={width}:-2", "-q:v", "3", "-f", "image2", "-"],
+        [ffmpeg(), "-v", "error", "-ss", f"{max(t, 0):.3f}", "-i", str(video_path),
+         "-frames:v", "1", "-vf", _scale(width), "-q:v", "3", "-f", "image2", "-"],
         capture_output=True, check=True,
     ).stdout
 
