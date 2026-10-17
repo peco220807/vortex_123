@@ -80,7 +80,7 @@ def sweep():
 if a.sweep:
     sweep()
     sys.exit()
-rows = []
+rows, secs = [], []
 extra_total = type_ok = type_n = 0
 qstat = defaultdict(lambda: [0, 0, 0, 0])  # (вид, вопрос) -> [да на видео с нарушением, всего, да на чистых, всего]
 for p in sorted(Path(a.checks).glob("*.json"), key=lambda p: int("".join(c for c in p.stem if c.isdigit()) or 0)):
@@ -113,6 +113,8 @@ for p in sorted(Path(a.checks).glob("*.json"), key=lambda p: int("".join(c for c
         type_n += 1
         type_ok += want_id in [e["type_id"] for e in ev if abs(e["t"] - t_true) <= a.extra]
     rows.append((d["video_id"], y, bool(ev), t_true, err, ev, len(cands)))
+    if "sec" in d:
+        secs.append((d["sec"], d["video_id"], d.get("model", "?")))
 
 tp = sum(y and pr for _, y, pr, *_ in rows)
 tn = sum((not y) and (not pr) for _, y, pr, *_ in rows)
@@ -131,6 +133,9 @@ print(f"Лишние срабатывания: {extra_total} (на чистых 
 print(f"Тип нарушения угадан: {type_ok}/{type_n}" if type_n else
       "Тип: в labels_clean.csv не заполнен type_hypothesis — не считаю")
 
+if secs:
+    print(f"Время VLM на видео ({secs[0][2]}): медиана {np.median([x[0] for x in secs]):.0f} с, "
+          f"макс {max(secs)[0]:.0f} с ({max(secs)[1]})")
 print("\nВопросы VLM: доля ответов «нарушение» на видео С нарушением | БЕЗ (хороший вопрос: слева больше)")
 for (kind, k), (pv, nv, pc, nc) in sorted(qstat.items()):
     l = f"{pv}/{nv} ({pv / nv:.0%})" if nv else "-"

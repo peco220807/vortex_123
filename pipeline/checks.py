@@ -83,6 +83,7 @@ def state(dets: list[dict], side_hint: str | None = None) -> dict:
     cids = people.cashier_tracks(dets, tracks, scene)
     tw = people.twin_tracks(dets, tracks, cids)
     bg = people.background_tracks(dets, tracks, cids, scene)
+    ex = people.side_excluded(dets, tracks, cids, scene)  # для «за спиной»/«чужой на месте» не считаем
     owner = {id(b): tr["id"] for tr in tracks for b in tr["boxes"]}
     steady = {tr["id"] for tr in tracks
               if dets[tr["frames"][-1]]["t"] - dets[tr["frames"][0]]["t"] >= people.MIN_ROLE_SEC}
@@ -102,10 +103,10 @@ def state(dets: list[dict], side_hint: str | None = None) -> dict:
                 continue
             elif r == "visitor" and tid not in bg:
                 st["visitor"].append((tid, b))
-            elif r == "cashier_side" and tid not in bg:
+            elif r == "cashier_side" and tid not in bg and tid not in ex:
                 st["side"].append((tid, b))
         frames.append(st)
-    return {"tracks": tracks, "scene": scene, "cids": cids, "bg": bg, "tw": tw, "steady": steady,
+    return {"tracks": tracks, "scene": scene, "cids": cids, "bg": bg, "tw": tw, "steady": steady, "ex": ex,
             "frames": frames, "owner": owner}
 
 
