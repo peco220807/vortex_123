@@ -41,9 +41,14 @@ def describe(event: dict) -> str:
     return f'{rule["observation"]} {rule["why"]} Источник: {src["document"]}, {src["clause"]}.'
 
 
-def analyze(video_path: str, threshold: float = 0.5) -> dict:
+def analyze(video_path: str, threshold: float = 0.5, deadline: float | None = None) -> dict:
+    """deadline — unix-время (time.time()), к которому надо вернуть результат.
+    Сервис передаёт его сам. Если time.time() близко к deadline — пропускать медленные шаги (VLM)
+    и возвращать то, что уже найдено. Проверка: meta["deadline"] внутри detect_events.
+    """
     t0 = time.time()
     meta = probe(video_path)
+    meta["deadline"] = deadline
     with tempfile.TemporaryDirectory() as tmp:
         frames = extract_frames(video_path, tmp, fps=ANALYSIS_FPS)
         events = [e for e in detect_events(frames, meta) if e["score"] >= threshold]

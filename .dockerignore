@@ -3,3 +3,5 @@ data/frames_around
 preds
 .git
 .venv
+var
+preds_api
