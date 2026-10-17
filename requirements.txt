@@ -2,6 +2,7 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9
+requests>=2.31          # scripts/jury_sim.py
 # ML (Чел 1 дополняет; только лицензии с коммерческим использованием, без AGPL/Ultralytics)
 numpy
 opencv-python-headless

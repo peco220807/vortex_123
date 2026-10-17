@@ -13,10 +13,15 @@ pipeline/            ML-часть (Чел 1)
   video_io.py        кадры через ffmpeg
 rules/rules.json     типы нарушений -> описание -> документ -> пункт (Чел 3)
 service/             FastAPI + веб-интерфейс (Чел 2)
+  app.py             API по разделу 10 ТЗ + /ui/* для интерфейса
+  store.py           задания в SQLite (var/jobs.db), переживают перезапуск
+  worker.py          очередь + отдельный процесс анализа с таймаутом
 scripts/
+  make_labels.py     xlsx организаторов -> data/labels_clean.csv (+ split train/holdout)
   frames_around.py   кадры и коллаж вокруг размеченных таймкодов — для разбора типов
   run_dataset.py     прогон analyze() по датасету -> preds/
   evaluate.py        метрики по разметке (вердикт, пропуски, ложные, таймкод)
+  jury_sim.py        прогон через ПУБЛИЧНЫЙ API параллельно, как жюри (время, схема, ключ)
 data/
   labels_clean.csv   разметка: 42 видео, split train/holdout (локально, не в git)
   videos/            .mov (локально, не в git)
@@ -42,6 +47,8 @@ API_KEY=<ключ> uvicorn service.app:app --host 0.0.0.0 --port 8000
 #   UI:  http://localhost:8000/
 #   STUB_ALWAYS_VIOLATION=1 — фейковое нарушение, чтобы отлаживать фронт без моделей
 ```
+
+Деплой, публичный адрес и проверка перед сдачей: **DEPLOY.md**.
 
 Docker: `docker build -t vortex . && docker run -p 8000:8000 -e API_KEY=<ключ> vortex`
 
