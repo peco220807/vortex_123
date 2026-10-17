@@ -108,7 +108,10 @@ def _classifier_events(timeline: list[dict], sig: dict, m: dict) -> list[dict]:
                     and e["first_i"] - 1 <= best <= e["last_i"] + 1), TYPES[tid]["visual"])
         act = timeline[best]["f"].get("action", "")
         events.append({"type_id": tid, "first_i": g[0], "last_i": g[-1], "peak_i": best, "n": len(g), "why": why,
-                       "lo": timeline[g[0]]["lo"], "hi": timeline[g[-1]]["hi"], "score": float(max(probs[g])),
+                       "lo": timeline[g[0]]["lo"], "hi": timeline[g[-1]]["hi"],
+                       # analyze() отсекает score < 0.5, а порог классификатора свой (и у ctx может быть ~0.1):
+                       # переводим так, чтобы «ровно на пороге» = 0.5
+                       "score": float(min(1.0, max(0.0, 0.5 + (max(probs[g]) - thr)))),
                        "description": (f"{act.rstrip('.')}. " if act else "") + f"Признак нарушения: {why}."})
     events.sort(key=lambda e: -e["score"])
     return sorted(events[:MAX_EVENTS], key=lambda e: e["lo"])
