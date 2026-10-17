@@ -424,15 +424,64 @@ def decide_novlm(cands: list[dict], p: dict | None = None) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- свет выключен, ноутбук светится (Х-11)
+LIGHTS_DROP = float(os.getenv("LIGHTS_DROP", "0.75"))  # яркость кадра устойчиво упала до <= 75% — свет выключили
+GLOW_RATIO = float(os.getenv("GLOW_RATIO", "1.2"))     # место ноутбука относительно кадра стало ярче в >= 1.2 раза:
+                                                       # экран включён (Х-11: 1.41; Х-12, ноутбук закрыт: 0.91)
+
+
+def glow_events(frames: list[tuple[float, Path]], dets: list[dict]) -> list[dict]:
+    """Кассир выключил свет и ушёл, а ноутбук остался включённым: в темноте его экран светится.
+    Без VLM — только яркость кадра и яркость рамки ноутбука от детектора."""
+    import cv2
+    lb = [b[:4] for d in dets for b in d["boxes"] if b[5] == "laptop"]
+    if len(frames) < 8 or len(lb) < 2 or not dets:
+        return []
+    box = np.median(np.asarray(lb, float), axis=0)
+    T, B, R = [], [], []
+    for t, p in frames:
+        g = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
+        if g is None:
+            continue
+        k = g.shape[1] / dets[0]["w"]
+        x1, y1, x2, y2 = (box * k).astype(int)
+        roi = g[max(0, y1):y2, max(0, x1):x2]
+        if roi.size == 0:
+            return []
+        T.append(t)
+        B.append(float(g.mean()))
+        R.append(float(roi.mean()) / max(1.0, float(g.mean())))
+    B, R = np.asarray(B), np.asarray(R)
+    for i in range(4, len(B) - 4):
+        ref = LIGHTS_DROP * np.median(B[max(0, i - 6):i])
+        if B[i] <= ref and np.median(B[i:i + 4]) <= ref:
+            if np.median(R[i + 2:]) >= GLOW_RATIO * np.median(R[max(0, i - 6):i - 1]):
+                return [{"type_id": "workplace_abandoned", "t": round(float(T[i]), 2), "score": 0.9,
+                         "why": "в кабинете выключен свет, ноутбук остался включённым",
+                         "evidence_t": [round(float(T[i - 1]), 2), round(float(T[i]), 2), round(float(T[i + 2]), 2)]}]
+            return []  # свет выключили, но ноутбук тёмный — ушёл по правилам
+    return []
+
+
+def _merge(ev: list[dict]) -> list[dict]:
+    """Одинаковый тип в пределах 5 с — одно событие."""
+    out = []
+    for e in sorted(ev, key=lambda e: e["t"]):
+        if not any(o["type_id"] == e["type_id"] and abs(o["t"] - e["t"]) <= 5 for o in out):
+            out.append(e)
+    return out
+
+
 def run(frames: list[tuple[float, Path]], dets: list[dict], side_hint: str | None = None,
         deadline: float | None = None, ask_all: bool = False) -> tuple[list[dict], list[dict]]:
     """Полный проход для сервиса: кандидаты -> вопросы VLM -> события. -> (события, кандидаты с ответами)."""
     import time
     cands = candidates(dets, side_hint)
+    glow = [] if "workplace_abandoned" in OFF else glow_events(frames, dets)
     if not cands:
-        return [], []
+        return glow, []
     if NOVLM:
-        return decide_novlm(cands), cands
+        return _merge(decide_novlm(cands) + glow), cands
     regs = regions(dets, side_hint)
     det_w = dets[0]["w"]
     for c in cands:
@@ -450,4 +499,4 @@ def run(frames: list[tuple[float, Path]], dets: list[dict], side_hint: str | Non
             c["answers"] = {k: next((x[k] for x in per if positive(k, x.get(k))), per[0].get(k)) for k in keys}
         else:
             c["answers"] = ask(c, frames, regs, det_w)
-    return decide(cands), cands
+    return _merge(decide(cands) + glow), cands
