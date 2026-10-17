@@ -33,16 +33,24 @@ def detect_events(frames: list[tuple[float, Path]], meta: dict) -> list[dict]:
     return run(frames, meta)
 
 
+def short_source(src: dict) -> str:
+    """«Постановление ... № 231, пункты 20 и 22» — без длинного названия в кавычках «...»."""
+    doc = (src.get("document") or "").strip()
+    clause = (src.get("clause") or "").strip()
+    if not doc or doc.startswith("<"):
+        return ""
+    doc = doc.split("«")[0].strip().rstrip(",")
+    return doc + (f", {clause}" if clause and not clause.startswith("<") else "")
+
+
 def describe(event: dict) -> str:
-    """Что видно (от VLM) + норматив из rules.json, если Чел 3 его заполнил. Источники не выдумываем."""
+    """Что видно (от VLM) + признак нарушения + норматив из rules.json (если Чел 3 заполнил). Источники не выдумываем."""
     text = (event.get("description") or "").strip()
     if not text:
         text = f'На видео видны признаки: {TYPES[event["type_id"]]["visual"]}.'
-    rule = RULES.get(event["type_id"])
-    src = (rule or {}).get("source") or {}
-    doc, clause = src.get("document", ""), src.get("clause", "")
-    if doc and not doc.startswith("<"):
-        text += f" Источник: {doc}" + (f", {clause}" if clause and not clause.startswith("<") else "") + "."
+    src = short_source((RULES.get(event["type_id"]) or {}).get("source") or {})
+    if src:
+        text = text.rstrip(".") + f". Источник: {src}."
     return text
 
 
