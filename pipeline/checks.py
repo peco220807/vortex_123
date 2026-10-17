@@ -382,8 +382,8 @@ def decide(cands: list[dict]) -> list[dict]:
 
 # ---------------------------------------------------------------- запасной режим без VLM
 # Только кандидаты детектора людей, с порогами длительности (подобраны scripts/checks_eval.py --sweep).
-# Включается CHECKS_NOVLM=1 (VLM не грузится) — если VLM не влезла по времени/памяти.
-NOVLM = os.getenv("CHECKS_NOVLM", "0") == "1"
+# По умолчанию (CHECKS_NOVLM=1) VLM не грузится; CHECKS_NOVLM=0 — прицельные вопросы VLM (см. выше).
+NOVLM = os.getenv("CHECKS_NOVLM", "1") == "1"  # по умолчанию ВКЛ: VLM на датасете ничего не различает
 NOVLM_P = {
     "left_min": float(os.getenv("NOVLM_LEFT_MIN", "12")),          # кассира нет >= столько секунд подряд
     "left_end": float(os.getenv("NOVLM_LEFT_END", "2")),          # ... или >= столько, если не вернулся до конца

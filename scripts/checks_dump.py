@@ -32,6 +32,7 @@ ap.add_argument("--out", default="data/checks")
 ap.add_argument("--force", action="store_true")
 a = ap.parse_args()
 
+checks.NOVLM = False  # дамп — именно ответы VLM, даже если сервис по умолчанию работает без неё
 only = {norm(x) for x in a.only.split(",") if x.strip()}
 out = Path(a.out)
 out.mkdir(parents=True, exist_ok=True)
