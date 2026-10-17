@@ -63,7 +63,8 @@ def apply(timeline: list[dict]) -> list[dict]:
             hits.append((i, "unauthorized_person", "рядом с кассиром на его стороне стола находится посторонний"))
 
         # 5. Смешение операций: два посетителя сразу, или новый посетитель приходит, пока на столе деньги прежнего
-        if f["visitor_count"] >= 2:
+        # с детектором людей двое у кассы — не повод сам по себе (клиент мог прийти не один): нужны деньги на столе
+        if f["visitor_count"] >= 2 and ("behind_cashier" not in f or f["money_on_desk"]):
             hits.append((i, "mixed_operations", "у кассы одновременно несколько клиентов"))
         elif f["person_entering"] and f["money_on_desk"] and (prev.get("person_leaving") or f["person_leaving"]):
             hits.append((i, "mixed_operations",
