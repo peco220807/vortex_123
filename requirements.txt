@@ -6,4 +6,8 @@ requests>=2.31          # scripts/jury_sim.py
 # ML (Чел 1 дополняет; только лицензии с коммерческим использованием, без AGPL/Ultralytics)
 numpy
 opencv-python-headless
+# torch ставится отдельно под CUDA: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+transformers>=4.57
+accelerate
+pillow
 openpyxl
