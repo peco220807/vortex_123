@@ -112,7 +112,8 @@ FACTS = {
     "person_leaving": "is someone walking out of the room or out of the frame",
     "person_entering": "is someone walking into the room or into the frame",
     "money_on_desk": "are banknotes / cash bundles lying on the desk",
-    "money_handed_over": "is cash being passed from one person's hands to another person",
+    "money_to_cashier": "is the visitor handing cash to the cashier (or putting it in front of the cashier)",
+    "money_to_visitor": "is the cashier handing cash to the visitor",
     "counting_machine_used": "is someone putting banknotes into or taking them from a money counting machine",
     "id_document_visible": "is an ID card / passport / document being handed over or looked at",
     "bag_on_desk": "is a cash-collection bag / sealed bag lying on the desk",
@@ -129,8 +130,8 @@ KEYS = list(FACTS)
 OBSERVE_PROMPT = (
     "These frames come from a ceiling camera above a bank cashier desk, in time order. "
     "Answer strictly about what is VISIBLE. Do not guess.\n"
-    f"Answer the {len(FACTS)} questions below IN THIS ORDER with numbers only, separated by spaces, "
-    "on one line. Counts: integer. Yes/no: 1 or 0. No words, no explanation.\n"
+    f"Answer ALL {len(FACTS)} questions on ONE line as pairs question_number:answer separated by spaces, "
+    "for example: 1:2 2:1 3:0 4:0 ... Counts: integer. Yes/no: 1 or 0. No other words.\n"
     + "\n".join(f"{i + 1}. {v}" for i, v in enumerate(FACTS.values()))
 )
 
@@ -156,31 +157,45 @@ def _as_int(v) -> int:
         return 1 if _as_bool(v) else 0
 
 
+_YES = {"1", "yes", "true", "да", "y"}
+
+
 def parse_facts(text: str) -> dict:
-    lines = [ln for ln in text.splitlines() if ln.strip()]
-    if sum(bool(re.match(r"\s*\d+[.):]\s*\S", ln)) for ln in lines) >= len(KEYS) // 2:
-        # ответ нумерованным списком «1. 2» — берём последнее число в каждой строке
-        nums = [re.findall(r"-?\d+", ln)[-1] for ln in lines if re.findall(r"-?\d+", ln)]
-    else:
-        nums = re.findall(r"-?\d+", text)
+    """Разбор ответа. Основной формат «1:2 2:1 ...»; запасные — числа подряд, нумерованный список, JSON.
+    parsed=True, если удалось получить хотя бы 3/4 ответов (недостающие считаются «нет»)."""
     d = {}
-    if len(nums) >= len(KEYS):
-        d = dict(zip(KEYS, nums[:len(KEYS)]))
-    else:
+    # 1) пары номер:ответ (также «1=2», «1) 2», «1. yes»)
+    for num, ans in re.findall(r"(?<!\d)(\d{1,2})\s*[:=.)]\s*(-?\d+|yes|no|true|false|да|нет)", text, re.I):
+        i = int(num) - 1
+        if 0 <= i < len(KEYS) and KEYS[i] not in d:
+            d[KEYS[i]] = ans
+    # 2) просто числа подряд
+    if len(d) < len(KEYS) * 3 // 4:
+        nums = re.findall(r"-?\d+", text)
+        if len(nums) == len(KEYS):
+            d = dict(zip(KEYS, nums))
+    # 3) JSON
+    if len(d) < len(KEYS) * 3 // 4:
         m = re.search(r"\{.*\}", text, re.S)
         try:
-            d = json.loads(m.group(0)) if m else {}
+            j = json.loads(m.group(0)) if m else {}
+            d = {k: j[k] for k in KEYS if k in j} or d
         except json.JSONDecodeError:
-            d = {}
+            pass
     out = {}
-    for k in FACTS:
-        out[k] = _as_int(d.get(k)) if k.endswith("_count") else _as_bool(d.get(k))
-    out["action"] = str(d.get("action") or "").strip()
-    out["parsed"] = bool(d)
+    for k in KEYS:
+        v = d.get(k, 0)
+        if k.endswith("_count"):
+            out[k] = _as_int(v)
+        else:
+            out[k] = _as_bool(v) if not isinstance(v, str) else v.strip().lower() in _YES or _as_bool(v)
+    out["action"] = ""
+    out["answered"] = len(d)
+    out["parsed"] = len(d) >= len(KEYS) * 3 // 4
     return out
 
 
-def observe(frames: list[tuple[float, bytes]], max_new_tokens: int = 48) -> dict:
+def observe(frames: list[tuple[float, bytes]], max_new_tokens: int = 80) -> dict:
     """Факты об окне: {people_count, cashier_at_desk, money_on_desk, ..., parsed, raw}."""
     text = _generate(frames, OBSERVE_PROMPT, max_new_tokens)
     f = parse_facts(text)

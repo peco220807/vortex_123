@@ -70,12 +70,29 @@ def apply(timeline: list[dict]) -> list[dict]:
 
         cashier_seen = cashier_seen or cashier
 
-    # 7. Приём наличных без документа: за весь визит клиента деньги были, документа не было
+    # 7. Порядок приёма наличных — по каждому визиту клиента
     for visit in _visits(timeline):
-        fs = [timeline[i]["f"] for i in visit]
-        money = [i for i in visit if timeline[i]["f"]["money_handed_over"] or timeline[i]["f"]["counting_machine_used"]]
-        if money and not any(x["id_document_visible"] for x in fs):
-            hits.append((money[0], "cash_intake_procedure", "клиент передал деньги, документ не предъявлялся"))
+        F = [timeline[i]["f"] for i in visit]
+        g = lambda f, k: bool(f.get(k))  # noqa: E731 — старые факты могут не иметь новых ключей
+        took = [i for i in visit if g(timeline[i]["f"], "money_to_cashier") or g(timeline[i]["f"], "money_handed_over")]
+        counted = [i for i in visit if g(timeline[i]["f"], "counting_machine_used")]
+        # 7а. деньги приняты, документ за весь визит не предъявлялся
+        if (took or counted) and not any(g(f, "id_document_visible") for f in F):
+            hits.append(((took or counted)[0], "cash_intake_procedure",
+                         "кассир принимает деньги, удостоверение личности клиента не проверялось"))
+        # 7б. приняли деньги, а потом часть отдали обратно в руки клиенту в том же визите
+        if took:
+            back = [i for i in visit if i > took[0] and g(timeline[i]["f"], "money_to_visitor")]
+            if back:
+                hits.append((back[0], "cash_intake_procedure",
+                             "после приёма и пересчёта часть денег возвращена клиенту в руки"))
+        # 7в. клиент уходит, пока его деньги ещё пересчитываются
+        for i in counted:
+            f = timeline[i]["f"]
+            nxt = timeline[i + 1]["f"] if i + 1 < len(timeline) else {}
+            if g(f, "person_leaving") and (g(nxt, "counting_machine_used") or g(f, "money_on_desk")):
+                hits.append((i, "cash_intake_procedure", "клиент ушёл, не дождавшись окончания пересчёта"))
+                break
 
     hits = [h for h in hits if h[1] not in OFF]
 

@@ -54,7 +54,8 @@ for r in csv.DictReader(open(a.labels, encoding="utf-8")):
         sig = signals.compute(frames)
         timeline = build_timeline(frames, meta, sig)
     for w in timeline:
-        w["f"].pop("raw", None)
+        if w["f"].get("parsed"):
+            w["f"].pop("raw", None)  # сырой ответ храним только у неразобранных — для отладки
     dst.write_text(json.dumps({
         "video_id": vid, "meta": meta, "timeline": timeline,
         "sig": {k: [round(float(x), 4) for x in v] for k, v in sig.items()},
