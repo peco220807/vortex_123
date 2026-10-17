@@ -25,20 +25,39 @@ from .store import JobStore
 log = logging.getLogger("vortex.worker")
 
 # Лимит жюри — 300 с от POST до done. Берём с запасом.
-SOFT_DEADLINE_SEC = float(os.getenv("SOFT_DEADLINE_SEC", "200"))  # от загрузки: analyze() должна закругляться
+SOFT_DEADLINE_SEC = float(os.getenv("SOFT_DEADLINE_SEC", "230"))  # от загрузки: к этому моменту видео должно быть готово
 MIN_RUN_SEC = float(os.getenv("MIN_RUN_SEC", "20"))  # минимум времени на анализ, даже если задание долго ждало
+MAX_RUN_SEC = float(os.getenv("MAX_RUN_SEC", "75"))  # максимум на одно видео, даже если очередь пуста
 RUN_TIMEOUT_SEC = float(os.getenv("RUN_TIMEOUT_SEC", "270"))  # жёсткий лимит одного запуска
 MODEL_LOAD_TIMEOUT_SEC = float(os.getenv("MODEL_LOAD_TIMEOUT_SEC", "900"))
 
 
 # ---------------------------------------------------------------- дочерний процесс
+def _warmup() -> None:
+    """Загрузить модели заранее, чтобы первое видео жюри не тратило на это свой лимит.
+    Ошибка прогрева не мешает старту: модели тогда догрузятся на первом видео."""
+    if os.getenv("STUB_ALWAYS_VIOLATION") == "1" or os.getenv("SKIP_WARMUP") == "1":
+        return
+    t0 = time.time()
+    try:
+        from pipeline import vlm, window_model
+
+        vlm.load()
+        window_model.load()
+        log.info("модели прогреты за %.1f с", time.time() - t0)
+    except Exception:  # noqa: BLE001
+        log.error("прогрев моделей не удался, загрузятся на первом видео:\n%s", traceback.format_exc())
+
+
 def child_main(conn) -> None:
     """Работает в отдельном процессе: грузит модели один раз и анализирует видео по запросу."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     try:
         from pipeline.analyze import analyze  # тут Чел 1 грузит веса
 
         takes_deadline = "deadline" in inspect.signature(analyze).parameters
         extra_sleep = float(os.getenv("DEBUG_EXTRA_SLEEP_SEC", "0"))  # только для тестов зависания
+        _warmup()
         conn.send(("ready", None))
     except Exception:  # noqa: BLE001
         conn.send(("load_error", traceback.format_exc()))
@@ -138,8 +157,8 @@ class Supervisor:
         self.current = job_id
         self.store.mark_running(job_id)
         started = time.time()
-        deadline = max(job["created_at"] + SOFT_DEADLINE_SEC, started + MIN_RUN_SEC)
         log.info("job %s: старт (ждал в очереди %.1f с)", job_id, started - job["created_at"])
+        deadline = self._fair_deadline(job, started)
 
         try:
             self._conn.send((job_id, path, deadline))
@@ -164,6 +183,18 @@ class Supervisor:
         else:
             log.error("job %s: ошибка анализа\n%s", job_id, payload)
             self.store.mark_failed(job_id, payload.splitlines()[0] if payload else "ошибка анализа")
+
+    def _fair_deadline(self, job: dict, now: float) -> float:
+        """Срок для analyze(): время до SOFT_DEADLINE делится поровну с теми, кто ждёт в очереди.
+        Задание на позиции p должно успеть после текущего и p-1 предыдущих, поэтому текущему —
+        не больше 1/(p+1) от остатка времени этого задания."""
+        slot = job["created_at"] + SOFT_DEADLINE_SEC - now
+        waiting = [j for j in self.store.unfinished() if j["job_id"] != job["job_id"]]
+        for p, j in enumerate(waiting, start=1):
+            slot = min(slot, (j["created_at"] + SOFT_DEADLINE_SEC - now) / (p + 1))
+        slot = max(min(slot, MAX_RUN_SEC), MIN_RUN_SEC)
+        log.info("job %s: срок на анализ %.0f с (в очереди ещё %d)", job["job_id"], slot, len(waiting))
+        return now + slot
 
     def info(self) -> dict:
         return {
