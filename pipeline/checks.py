@@ -58,6 +58,7 @@ PLAN = {
 LEFT_MIN_SEC = 2.0     # кассира нет хотя бы 2 с подряд
 LEFT_END_SEC = 1.0     # ... или 1 с, если он так и не вернулся до конца ролика
 SEAT_R = 0.5           # «встал с места»: отошёл дальше 0.5 размера человека от места, где сидел
+ENTER_R = float(os.getenv("ENTER_R", "0.5"))  # «кассир» в первые 3 с прошёл >= 0.5 s — это вошедший в пустой кабинет
 SECOND_GAP_SEC = 8.0   # новый клиент пришёл, когда прежний ещё у кассы или ушёл меньше 8 с назад
 CROP_R = 2.4           # вырез стола: ± 2.4 размера человека вокруг ноутбука
 VISIT_REJOIN_SEC = 2.0  # обрывок того же клиента: не позже 2 с и не дальше 0.8 размера человека
@@ -176,6 +177,22 @@ def candidates(dets: list[dict], side_hint: str | None = None) -> list[dict]:
             out.append({"kind": "left", "t": t_stand, "times": look,
                         "info": {"absent_sec": round(T[b] - T[a] + 1 / fps, 1), "t_left": t_left,
                                  "t_stand": t_stand, "at_end": at_end}})
+
+    # пустой кабинет: тот, кого детектор считает кассиром, в начале ролика ВОШЁЛ (Х-32, 33, 40), а не сидел.
+    # Настоящий кассир в первые 3 с почти неподвижен (сдвиг <= 0.33 s на всех видео); вошедший — 0.65..0.95 s
+    first = min((tr for tr in S["tracks"] if tr["id"] in S["cids"]), key=lambda tr: tr["frames"][0], default=None)
+    sc_s = S["scene"].get("s") or 100.0
+    if first is not None and ENTER_R > 0:
+        t0 = T[first["frames"][0]]
+        pts = [(T[f], people._center(b)) for f, b in zip(first["frames"], first["boxes"]) if T[f] <= t0 + 3]
+        if t0 <= T[0] + people.START_SEC and max(math.dist(pts[0][1], q) for _, q in pts) >= ENTER_R * sc_s:
+            # таймкод — когда вошедший ближе всего к столу (трогает технику, Х-33, Х-40): первый кадр в 20% ближайших
+            a = S["scene"].get("anchor") or _seat(F) or pts[-1][1]
+            dd = [(T[f], math.dist(people._center(b), a)) for f, b in zip(first["frames"], first["boxes"])]
+            q = float(np.percentile([x for _, x in dd], 20))
+            t_in = next(t for t, x in dd if x <= q)
+            out.append({"kind": "entered", "t": t_in, "times": [t0, t_in, min(t_end, t_in + 1.0)],
+                        "info": {"t0": t0, "move": round(max(math.dist(pts[0][1], q) for _, q in pts) / sc_s, 2)}})
 
     # посторонний на месте кассира (кассира нет) / подошёл к работающему кассиру
     stranger = [bool(f["side"]) and not f["cashier"] for f in F]
@@ -328,6 +345,8 @@ def decide(cands: list[dict]) -> list[dict]:
             if positive("laptop", a.get("laptop")):
                 add("workplace_abandoned", t, "кассир покинул рабочее место, ноутбук остался открытым",
                     [t, (c.get("info") or {}).get("t_left", t)] + c["times"][:1])
+        elif k == "entered":
+            add("unauthorized_person", t, "в пустой кабинет вошёл человек и занял рабочее место кассира", c["times"])
         elif k == "stranger":
             if TRUST_STRANGER or positive("someone_side", a.get("someone_side")):
                 add("unauthorized_person", t, "на рабочем месте кассира находится посторонний, кассира нет",
@@ -370,6 +389,7 @@ NOVLM_P = {
     "left_end": float(os.getenv("NOVLM_LEFT_END", "2")),          # ... или >= столько, если не вернулся до конца
     "behind_min": float(os.getenv("NOVLM_BEHIND_MIN", "5")),      # подошедший к кассиру виден >= с (0 — выкл.)
     "stranger_min": float(os.getenv("NOVLM_STRANGER_MIN", "0")),  # чужой на месте кассира >= с (0 — выкл.)
+    "entered": float(os.getenv("NOVLM_ENTERED", "1")),            # вошедший в пустой кабинет (0 — выкл.)
 }
 
 
@@ -387,6 +407,9 @@ def decide_novlm(cands: list[dict], p: dict | None = None) -> list[dict]:
         elif k == "stranger" and p["stranger_min"] > 0 and info.get("dur", 99) >= p["stranger_min"]:
             ev.append({"type_id": "unauthorized_person", "t": t, "evidence_t": c["times"],
                        "why": "на рабочем месте кассира находится посторонний, кассира нет"})
+        elif k == "entered" and p.get("entered", 1) > 0:
+            ev.append({"type_id": "unauthorized_person", "t": t, "evidence_t": c["times"],
+                       "why": "в пустой кабинет вошёл человек и занял рабочее место кассира"})
         elif k == "behind" and p["behind_min"] > 0 and info.get("dur", 0) >= p["behind_min"]:
             ev.append({"type_id": "unauthorized_person", "t": t, "evidence_t": c["times"],
                        "why": "к кассиру на его сторону стола подошёл посторонний"})
@@ -413,7 +436,7 @@ def run(frames: list[tuple[float, Path]], dets: list[dict], side_hint: str | Non
     regs = regions(dets, side_hint)
     det_w = dets[0]["w"]
     for c in cands:
-        if c["kind"] == "stranger" and TRUST_STRANGER and not ask_all:
+        if c["kind"] == "entered" or (c["kind"] == "stranger" and TRUST_STRANGER and not ask_all):
             continue  # VLM не нужна (ask_all — для офлайн-перебора в scripts/checks_eval.py)
         if deadline and time.time() > deadline - 10:
             break
