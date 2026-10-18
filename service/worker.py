@@ -35,16 +35,34 @@ MODEL_LOAD_TIMEOUT_SEC = float(os.getenv("MODEL_LOAD_TIMEOUT_SEC", "900"))
 # ---------------------------------------------------------------- дочерний процесс
 def _warmup() -> None:
     """Загрузить модели заранее, чтобы первое видео жюри не тратило на это свой лимит.
+    Грузим только то, что реально используется в текущем режиме:
+      * PIPELINE=checks (по умолчанию): детектор людей RT-DETR; VLM — только если CHECKS_NOVLM=0;
+      * PIPELINE=windows: VLM + классификатор окон.
     Ошибка прогрева не мешает старту: модели тогда догрузятся на первом видео."""
     if os.getenv("STUB_ALWAYS_VIOLATION") == "1" or os.getenv("SKIP_WARMUP") == "1":
         return
     t0 = time.time()
+    loaded = []
     try:
-        from pipeline import vlm, window_model
+        mode = os.getenv("PIPELINE", "checks")
+        need_vlm = mode != "checks" or os.getenv("CHECKS_NOVLM", "1") == "0"
+        if mode == "checks":
+            from pipeline import people
 
-        vlm.load()
-        window_model.load()
-        log.info("модели прогреты за %.1f с", time.time() - t0)
+            if people.enabled():
+                people.load()  # заодно импортирует torch/transformers — это тоже секунды
+                loaded.append("RT-DETR")
+        if need_vlm:
+            from pipeline import vlm
+
+            vlm.load()
+            loaded.append("VLM")
+        if mode != "checks":
+            from pipeline import window_model
+
+            window_model.load()
+            loaded.append("классификатор окон")
+        log.info("модели прогреты за %.1f с: %s", time.time() - t0, ", ".join(loaded) or "нечего грузить")
     except Exception:  # noqa: BLE001
         log.error("прогрев моделей не удался, загрузятся на первом видео:\n%s", traceback.format_exc())
 
