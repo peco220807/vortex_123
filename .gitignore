@@ -24,3 +24,12 @@ venv/
 # данные сервиса: база заданий и временные загрузки
 var/
 preds_api/
+
+ngrok.exe
+
+*.txt
+!requirements.txt
+ngrok.exe
+cloudflared.exe
+ngrok.zip
+preds_api/
