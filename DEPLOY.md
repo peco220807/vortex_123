@@ -27,7 +27,7 @@ python -c "import torch; print(torch.cuda.is_available())"   # должно бы
 ```powershell
 ngrok config add-authtoken <токен из кабинета ngrok>
 ```
-Постоянный домен — в кабинете ngrok → Domains (`<имя>.ngrok-free.app`).
+Постоянный домен — в кабинете ngrok → Domains. Наш: `grout-irritably-thesis.ngrok-free.dev` (привязан к аккаунту, поэтому `ngrok http 8000` поднимает именно его).
 
 ## 2. Запуск (два окна PowerShell)
 
@@ -42,31 +42,31 @@ $env:CHECKS_NOVLM = "1"              # финальный режим: детек
 $env:PYTHONIOENCODING = "utf-8"
 python -m uvicorn service.app:app --host 0.0.0.0 --port 8000
 ```
-Ждать в логе строки `модели прогреты за … с: RT-DETR` и `анализатор готов`.
+Ждать в логе строки `модели прогреты за … с` и `анализатор готов`.
 **Не** добавлять `--reload` и `--workers`: процесс анализа с моделью должен быть один.
 
 **Окно 2 — публичный адрес:**
 ```powershell
-ngrok http --url=<имя>.ngrok-free.app 8000
+ngrok http 8000
 ```
 
-Проверка: http://localhost:8000/health → `"analyzer_ready": true`; затем `https://<имя>.ngrok-free.app/` с телефона
+Проверка: http://localhost:8000/health → `"analyzer_ready": true`; затем `https://grout-irritably-thesis.ngrok-free.dev/` с телефона
 через мобильный интернет.
 
-Ключ генерируется так: `python -c "import secrets; print(secrets.token_urlsafe(24))"`. В git его не кладём.
+Ключ передаётся жюри отдельно, в репозиторий (он публичный) его не кладём. Сгенерировать новый: `python -c "import secrets; print(secrets.token_urlsafe(24))"`. 
 
 ## 3. Что отдаётся жюри
 
 | | |
 |---|---|
-| Интерфейс | `https://<имя>.ngrok-free.app/` |
-| Загрузка видео | `POST https://<имя>.ngrok-free.app/api/v1/analyze` (multipart, поле `file`) |
-| Результат | `GET https://<имя>.ngrok-free.app/api/v1/jobs/{job_id}` |
+| Интерфейс | `https://grout-irritably-thesis.ngrok-free.dev/` |
+| Загрузка видео | `POST https://grout-irritably-thesis.ngrok-free.dev/api/v1/analyze` (multipart, поле `file`) |
+| Результат | `GET https://grout-irritably-thesis.ngrok-free.dev/api/v1/jobs/{job_id}` |
 | Ключ | заголовок `X-API-Key: <ключ>` |
 
 ```bash
-curl -X POST https://<имя>.ngrok-free.app/api/v1/analyze -H "X-API-Key: <ключ>" -F "file=@video.mov"
-curl https://<имя>.ngrok-free.app/api/v1/jobs/<job_id> -H "X-API-Key: <ключ>"
+curl -X POST https://grout-irritably-thesis.ngrok-free.dev/api/v1/analyze -H "X-API-Key: <ключ>" -F "file=@video.mov"
+curl https://grout-irritably-thesis.ngrok-free.dev/api/v1/jobs/<job_id> -H "X-API-Key: <ключ>"
 ```
 ngrok в **браузере** один раз показывает страницу-предупреждение («Visit Site»); запросы API из скриптов
 и curl она не затрагивает.
@@ -75,14 +75,20 @@ ngrok в **браузере** один раз показывает страни�
 
 ```powershell
 # как жюри: 5 видео одновременно через ПУБЛИЧНЫЙ адрес
-python scripts/jury_sim.py --url https://<имя>.ngrok-free.app --key <ключ> --videos data\videos --limit 5 --parallel 5
+python scripts/jury_sim.py --url https://grout-irritably-thesis.ngrok-free.dev --key <ключ> --videos data\videos --limit 5 --parallel 5
 ```
 Цель: `Запрос без ключа -> 401 OK`, `Не засчитаются у жюри: 0`, максимальное время заметно меньше 300 с.
 
 Сценарий раздела 4 ТЗ в интерфейсе — на 1–2 видео с нарушением: статус обработки → вердикт →
 у каждого нарушения тип, таймкод, 1–3 кадра, описание и «Источник: …, пункт …».
 
+С самого сервера адрес ngrok может не открываться (сеть/антивирус мешают ноутбуку обращаться к себе через ngrok).
+Тогда `jury_sim.py` гоняем на `--url http://localhost:8000`, а публичный адрес проверяем с телефона через мобильный интернет.
+
 Офлайн: выключить Wi-Fi (ngrok при этом тоже отключится), прогнать видео через http://localhost:8000 — анализ должен работать.
+
+**Проверено 18.10:** 33 train-видео по 5 одновременно — 0 необработанных, максимум 38 с; holdout 9 видео — максимум 22 с;
+без ключа — 401; интерфейс и API открываются с телефона через ngrok; анализ работает с выключенным Wi-Fi.
 
 ## 5. Пока идёт проверка жюри
 
